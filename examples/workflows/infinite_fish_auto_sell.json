@@ -1,0 +1,192 @@
+{
+  "id": "infinite_fish_auto_sell",
+  "name": "无限摸鱼转生-自动清包（v2 引擎示例）",
+  "description": "完整自包含工作流：收集所有窗口句柄 → 清理弹窗 → 打开背包 → 一键回收 → 关闭。展示 OmniFlow workflow v2 引擎的关键能力：IF 节点（条件分支）、WAIT_FOR_WINDOW 节点（窗口等待）、变量系统（outputs/context 跨步骤传值）。⚠️ 本 workflow 是纯 GUI 自动化示例（不读不写游戏内存），使用时请遵守游戏 ToS。来源：易语言乐玩插件脚本翻译。",
+  "steps": [
+    {
+      "id": "phase0_collect_hwnds",
+      "type": "subflow",
+      "description": "Phase 0: 收集所有相关窗口句柄到 context（幂等，无窗口时 hwnd=null）",
+      "steps": [
+        {
+          "id": "p0_main",
+          "type": "tool_call",
+          "tool_name": "window_find",
+          "arguments": {"class_name": "TFrmMain", "title": "无限摸鱼转生"},
+          "outputs": {"main_hwnd": "hwnd"},
+          "description": "主窗口"
+        },
+        {
+          "id": "p0_error",
+          "type": "tool_call",
+          "tool_name": "window_find",
+          "arguments": {"title": "Gamesoft"},
+          "outputs": {"error_hwnd": "hwnd"},
+          "description": "Gamesoft 错误窗口（可能没有）"
+        },
+        {
+          "id": "p0_prompt",
+          "type": "tool_call",
+          "tool_name": "window_find",
+          "arguments": {"class_name": "#32770", "title": "提示"},
+          "outputs": {"prompt_hwnd": "hwnd"},
+          "description": "#32770 类提示窗口（可能没有）"
+        },
+        {
+          "id": "p0_bag",
+          "type": "tool_call",
+          "tool_name": "window_find",
+          "arguments": {"class_name": "TFrmBeibao", "title": "背包"},
+          "outputs": {"open_bag_hwnd": "hwnd"},
+          "description": "已开背包窗口（可能没有）"
+        }
+      ]
+    },
+    {
+      "id": "phase1_close_error_window",
+      "type": "if",
+      "condition": "error_hwnd is not None and error_hwnd != 0",
+      "if_steps": [
+        {
+          "id": "p1e1_press",
+          "type": "tool_call",
+          "tool_name": "key_press",
+          "arguments": {"key": "enter"},
+          "description": "Gamesoft 错误窗口存在则按回车关闭"
+        }
+      ],
+      "else_steps": [
+        {"id": "p1e1_skip", "type": "delay", "delay_seconds": 0.05}
+      ]
+    },
+    {
+      "id": "phase2_close_prompt_window",
+      "type": "if",
+      "condition": "prompt_hwnd is not None and prompt_hwnd != 0",
+      "if_steps": [
+        {
+          "id": "p2e1_press",
+          "type": "tool_call",
+          "tool_name": "key_press",
+          "arguments": {"key": "enter"},
+          "description": "提示窗口存在则按回车关闭"
+        }
+      ],
+      "else_steps": [
+        {"id": "p2e1_skip", "type": "delay", "delay_seconds": 0.05}
+      ]
+    },
+    {
+      "id": "phase3_close_open_bag",
+      "type": "if",
+      "condition": "open_bag_hwnd is not None and open_bag_hwnd != 0",
+      "if_steps": [
+        {
+          "id": "p3e1_close",
+          "type": "tool_call",
+          "tool_name": "window_close",
+          "arguments": {"hwnd": "{open_bag_hwnd}"},
+          "description": "已开背包窗口则关闭（用 window_close 工具发 WM_CLOSE 消息）"
+        }
+      ],
+      "else_steps": [
+        {"id": "p3e1_skip", "type": "delay", "delay_seconds": 0.05}
+      ]
+    },
+    {
+      "id": "phase4_check_main_window",
+      "type": "if",
+      "condition": "main_hwnd is not None and main_hwnd != 0",
+      "if_steps": [
+        {
+          "id": "phase4_open_bag_and_recycle",
+          "type": "subflow",
+          "description": "Phase 4: 打开背包 → 等窗口出现 → 找一键回收 → 确认 → 关闭",
+          "steps": [
+            {
+              "id": "p4_bind_main",
+              "type": "tool_call",
+              "tool_name": "bind_window",
+              "arguments": {
+                "hwnd": "{main_hwnd}",
+                "display_mode": "dx",
+                "mouse_mode": "windows",
+                "keyboard_mode": "windows"
+              },
+              "description": "绑定到主窗口（hwnd 来自 context.main_hwnd）"
+            },
+            {
+              "id": "p4_find_bag_btn",
+              "type": "tool_call",
+              "tool_name": "find_image",
+              "arguments": {"image_path": "打开背包.bmp", "similarity": 0.8},
+              "outputs": {"bag_btn_found": "found"},
+              "description": "在主窗口找'打开背包'按钮"
+            },
+            {
+              "id": "p4_wait_bag_window",
+              "type": "wait_for_window",
+              "wait_class_name": "TFrmBeibao",
+              "wait_title": "背包",
+              "wait_timeout_seconds": 5.0,
+              "wait_poll_interval": 0.3,
+              "outputs": {"bag_hwnd_after": "hwnd"},
+              "description": "等背包窗口出现（最多 5s）"
+            },
+            {
+              "id": "p4_find_recycle",
+              "type": "tool_call",
+              "tool_name": "find_image",
+              "arguments": {"image_path": "一键回收.bmp", "similarity": 0.8},
+              "description": "找一键回收按钮"
+            },
+            {
+              "id": "p4_confirm_if",
+              "type": "if",
+              "condition": "confirm_hwnd is not None and confirm_hwnd != 0",
+              "if_steps": [
+                {
+                  "id": "p4_confirm_press",
+                  "type": "tool_call",
+                  "tool_name": "key_press",
+                  "arguments": {"key": "enter"},
+                  "description": "确认清空"
+                }
+              ],
+              "else_steps": [
+                {"id": "p4_confirm_skip", "type": "delay", "delay_seconds": 0.05}
+              ]
+            },
+            {
+              "id": "p4_close_bag",
+              "type": "if",
+              "condition": "bag_hwnd_after is not None and bag_hwnd_after != 0",
+              "if_steps": [
+                {
+                  "id": "p4_close_bag_call",
+                  "type": "tool_call",
+                  "tool_name": "window_close",
+                  "arguments": {"hwnd": "{bag_hwnd_after}"},
+                  "description": "关闭背包窗口"
+                }
+              ],
+              "else_steps": [
+                {"id": "p4_close_bag_skip", "type": "delay", "delay_seconds": 0.05}
+              ]
+            }
+          ]
+        }
+      ],
+      "else_steps": [
+        {
+          "id": "p4_no_main",
+          "type": "delay",
+          "delay_seconds": 0.1,
+          "description": "主窗口未找到，workflow 跳过实际操作"
+        }
+      ]
+    }
+  ],
+  "created_at": "2026-06-13T00:00:00",
+  "updated_at": "2026-06-13T00:00:00"
+}
