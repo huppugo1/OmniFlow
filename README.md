@@ -2,7 +2,7 @@
 
 > 基于 MCP (Model Context Protocol) 协议的 Windows 自动化全能工具
 
-**English** | [中文] (docs/locales/zh-CN/README.md)| [日本語](docs/locales/ja/README.md) | [Deutsch](docs/locales/de/README.md)
+**English** | | [中文](docs/locales/zh-CN/README.md)| [日本語](docs/locales/ja/README.md) | [Deutsch](docs/locales/de/README.md)
 
 OmniFlow encapsulates Windows desktop automation capabilities (window operations, image/color recognition, OCR, keyboard/mouse simulation, background binding, memory operations, etc.) as a standard **MCP Server**. Any AI client supporting the MCP protocol (such as Claude Desktop, VS Code, CodeBuddy, Cursor, Windsurf, Continue, Cline, Cody, Crayfish, Hermes, Trae, Kiro, etc.) can directly call Windows automation capabilities.
 
