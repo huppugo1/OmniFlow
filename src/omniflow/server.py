@@ -28,6 +28,9 @@ from .engine.types import (
 )
 from .tools import (
     binding,
+    composite,
+    detect,
+    errors as errors_mod,
     image,
     input as input_module,
     memory,
@@ -79,6 +82,46 @@ def _image_to_base64(img: Image.Image, fmt: str = "png") -> str:
     buf = io.BytesIO()
     img.save(buf, format=fmt)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _wrap_result(result: Any) -> dict:
+    """统一包装 tool 返回为 ``{success, data, message, error_code, recovery_suggestions}``.
+
+    兼容原 tool 返回的两类：
+
+    - **成功** —— 任何不含 ``error``/``status="error"`` 的 dict
+    - **失败** —— ``{"error": "..."}`` 或 ``{"status": "error", ...}``
+
+    **不**改 ``data`` 字段的内容——workflow dispatcher 仍能按原字段名
+    （如 ``hwnd`` / ``width`` / ``found``）提取。这是有意为之的"渐进
+    包装"，避免一次性改动 43 个 tool 的返回格式。
+    """
+    if not isinstance(result, dict):
+        return {
+            "success": True,
+            "data": result,
+            "message": "ok",
+            "error_code": None,
+            "recovery_suggestions": [],
+        }
+    # 失败：error 字段或 status=="error"
+    if result.get("error") or result.get("status") == "error":
+        error_code = result.get("error_code", errors_mod.ErrorCode.UNKNOWN)
+        return {
+            "success": False,
+            "data": result,
+            "message": str(result.get("error", "Unknown error")),
+            "error_code": error_code,
+            "recovery_suggestions": errors_mod.get_recovery_suggestions(error_code),
+        }
+    # 成功
+    return {
+        "success": True,
+        "data": result,
+        "message": result.get("message", "ok"),
+        "error_code": None,
+        "recovery_suggestions": [],
+    }
 
 
 # ============================================================
@@ -515,6 +558,66 @@ TOOLS = [
             "required": ["workflow_id"],
         },
     ),
+    # ---- 组合（AI 友好——合并 2-3 个原子 Tool 的常见操作）----
+    Tool(
+        name="detect_bind_mode",
+        description="自动检测 hwnd 的最佳绑定模式（健康检查 + 推荐 gdi/dx/dx2/opengl）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hwnd": {"type": "integer", "description": "目标窗口句柄"},
+            },
+            "required": ["hwnd"],
+        },
+    ),
+    Tool(
+        name="click_image",
+        description="找图并点击（合并 find_image + mouse_move + mouse_click 一步完成）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "image_path": {"type": "string", "description": "模板图片路径"},
+                "similarity": {"type": "number", "description": "相似度阈值 0-1, 默认 0.9"},
+                "region": {"type": "object", "description": "搜索区域 {left, top, right, bottom}, 省略=全屏"},
+                "button": {"type": "string", "description": "按键: left/right/middle, 默认 left"},
+                "clicks": {"type": "integer", "description": "点击次数, 默认 1"},
+            },
+            "required": ["image_path"],
+        },
+    ),
+    Tool(
+        name="wait_and_click",
+        description="轮询等图片出现，找到后点击（适合等加载完成 / 等按钮出现）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "image_path": {"type": "string", "description": "模板图片路径"},
+                "timeout": {"type": "number", "description": "超时秒数, 默认 10"},
+                "poll_interval": {"type": "number", "description": "轮询间隔秒数, 默认 0.5"},
+                "similarity": {"type": "number", "description": "相似度阈值 0-1, 默认 0.9"},
+                "region": {"type": "object", "description": "搜索区域"},
+                "button": {"type": "string", "description": "按键, 默认 left"},
+                "clicks": {"type": "integer", "description": "点击次数, 默认 1"},
+            },
+            "required": ["image_path"],
+        },
+    ),
+    Tool(
+        name="ocr_and_click",
+        description="OCR 识别区域找文字，找到后点击区域中心（粗略——OCR 不返回精确坐标）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "要找的文字"},
+                "region": {"type": "object", "description": "搜索区域 {left, top, right, bottom}（必填）"},
+                "timeout": {"type": "number", "description": "超时秒数, 默认 10"},
+                "poll_interval": {"type": "number", "description": "轮询间隔秒数, 默认 0.5"},
+                "button": {"type": "string", "description": "按键, 默认 left"},
+                "clicks": {"type": "integer", "description": "点击次数, 默认 1"},
+            },
+            "required": ["text", "region"],
+        },
+    ),
     # ---- 插件 ----
     Tool(
         name="plugin_list",
@@ -579,21 +682,42 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
-    """分发工具调用."""
+    """分发工具调用——返回统一格式 ``{success, data, message, error_code}``."""
     try:
         result = await _handle_tool(name, arguments)
 
-        # 截图返回图片
+        # 截图返回图片（保留 ImageContent 行为；外层仍是统一格式）
         if name == "screenshot" and isinstance(result, dict) and "image_base64" in result:
             return [
-                TextContent(type="text", text=f"截图完成，尺寸: {result.get('width')}x{result.get('height')}"),
+                TextContent(
+                    type="text",
+                    text=_to_json({
+                        "success": True,
+                        "data": {
+                            "width": result["width"],
+                            "height": result["height"],
+                        },
+                        "message": f"截图完成，尺寸: {result['width']}x{result['height']}",
+                        "error_code": None,
+                        "recovery_suggestions": [],
+                    }),
+                ),
                 ImageContent(type="image", data=result["image_base64"], mimeType="image/png"),
             ]
 
-        return [TextContent(type="text", text=_to_json(result))]
+        return [TextContent(type="text", text=_to_json(_wrap_result(result)))]
     except Exception as e:
         logger.exception(f"工具 {name} 执行失败")
-        return [TextContent(type="text", text=_to_json({"error": str(e)}))]
+        return [TextContent(type="text", text=_to_json({
+            "success": False,
+            "data": None,
+            "message": str(e),
+            "error_code": "E0000",
+            "recovery_suggestions": [
+                "查看 server 日志获取详细 traceback",
+                "检查参数是否合法",
+            ],
+        }))]
 
 
 async def _handle_tool(name: str, args: dict) -> Any:
@@ -763,6 +887,37 @@ async def _handle_tool(name: str, args: dict) -> Any:
         return workflow.pause(args["workflow_id"])
     elif name == "workflow_resume":
         return workflow.resume(args["workflow_id"])
+
+    # ---- 组合（AI 友好的合并 Tool）----
+    elif name == "detect_bind_mode":
+        return detect.detect_bind_mode(args["hwnd"])
+    elif name == "click_image":
+        return composite.click_image(
+            image_path=args["image_path"],
+            similarity=args.get("similarity", 0.9),
+            region=args.get("region"),
+            button=args.get("button", "left"),
+            clicks=args.get("clicks", 1),
+        )
+    elif name == "wait_and_click":
+        return composite.wait_and_click(
+            image_path=args["image_path"],
+            timeout=args.get("timeout", 10.0),
+            poll_interval=args.get("poll_interval", 0.5),
+            similarity=args.get("similarity", 0.9),
+            region=args.get("region"),
+            button=args.get("button", "left"),
+            clicks=args.get("clicks", 1),
+        )
+    elif name == "ocr_and_click":
+        return composite.ocr_and_click(
+            text=args["text"],
+            region=args["region"],
+            timeout=args.get("timeout", 10.0),
+            poll_interval=args.get("poll_interval", 0.5),
+            button=args.get("button", "left"),
+            clicks=args.get("clicks", 1),
+        )
 
     # ---- 插件 ----
     elif name == "plugin_list":
