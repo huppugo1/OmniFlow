@@ -2,7 +2,7 @@
 
 > 基于 MCP (Model Context Protocol) 协议的 Windows 自动化全能工具
 
-[English](docs/locales/en/README.md) | **中文** | [日本語](docs/locales/ja/README.md) | [Deutsch](docs/locales/de/README.md)
+[English](../en/README.md) | **中文** | [日本語](../ja/README.md) | [Deutsch](../de/README.md)
 
 OmniFlow 将 Windows 桌面自动化能力（窗口操作、图色识别、文字识别、键鼠模拟、后台绑定、内存操作等）封装为标准的 **MCP Server**，使得任何支持 MCP 协议的 AI 客户端（如 Claude Desktop、VS Code、CodeBuddy、Cursor、Windsurf、Continue、Cline、Cody、Crayfish、Hermes、Trae、Kiro 等）都能直接调用 Windows 自动化能力。
 
